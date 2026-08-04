@@ -31,12 +31,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxfixes3 \
     libxkbcommon0 \
     libxrandr2 \
-    xdg-utils
+    xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
 COPY package*.json ./
 RUN npm install --omit=dev
+
 COPY . .
-RUN chmod +x railway-entrypoint.sh
+
+RUN chmod +x railway-entrypoint.sh \
+    && command -v Xvfb \
+    && command -v xvfb-run \
+    && command -v xauth
 
 CMD ["./railway-entrypoint.sh"]
