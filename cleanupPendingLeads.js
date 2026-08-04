@@ -71,7 +71,7 @@ async function acquireLock(client) {
 
     return rows[0]?.acquired === true;
 }
-
+//empty commit
 async function releaseLock(client) {
     await client.query(
         "SELECT pg_advisory_unlock($1)",
