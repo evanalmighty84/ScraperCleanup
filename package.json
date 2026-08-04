@@ -1,11 +1,11 @@
 {
   "name": "scraper-cleanup",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Standalone Railway cleanup runner that enriches leftover scraper leads through FamilyTreeNow.",
   "main": "cleanupPendingLeads.js",
   "scripts": {
-    "start": "node cleanupPendingLeads.js"
+    "start": "xvfb-run -a -s \"-screen 0 1920x1080x24 -ac +extension RANDR\" node cleanupPendingLeads.js"
   },
   "engines": {
     "node": "20.x"

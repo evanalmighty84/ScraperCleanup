@@ -55,3 +55,13 @@ WHERE id IN (
 npm install
 npm start
 ```
+
+## Headed Chrome on Railway
+
+The scraper intentionally keeps `headless: false`, matching the original enrichment service. The npm start command launches it through Xvfb:
+
+```bash
+xvfb-run -a -s "-screen 0 1920x1080x24 -ac +extension RANDR" node cleanupPendingLeads.js
+```
+
+Do not override Railway's Start Command with `node cleanupPendingLeads.js`. Leave it blank or set it to `npm start`. Ensure Railway builds from the included Dockerfile so the `xvfb` and Google Chrome packages are installed.
