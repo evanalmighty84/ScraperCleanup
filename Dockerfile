@@ -1,8 +1,7 @@
 FROM node:20-bookworm-slim
 
 ENV NODE_ENV=production \
-    DEBIAN_FRONTEND=noninteractive \
-    DISPLAY=:99
+    DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
