@@ -1,18 +1,18 @@
 {
-  "name": "cleanup-pending-leads",
+  "name": "scraper-cleanup",
   "version": "1.0.0",
   "private": true,
-  "description": "Railway cron job that closes leftover pending scraper leads without running FTN enrichment.",
+  "description": "Standalone Railway cleanup runner that enriches leftover scraper leads through FamilyTreeNow.",
   "main": "cleanupPendingLeads.js",
   "scripts": {
-    "start": "node cleanupPendingLeads.js",
-    "dry-run": "CLEANUP_DRY_RUN=true node cleanupPendingLeads.js"
+    "start": "node cleanupPendingLeads.js"
   },
   "engines": {
     "node": "20.x"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "playwright-core": "^1.49.1"
   }
 }

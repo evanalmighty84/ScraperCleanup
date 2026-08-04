@@ -1,79 +1,57 @@
-# CleanupPendingLeads
+# ScraperCleanup
 
-Standalone Railway cron service that performs cleanup only.
-
-It does **not** run FamilyTreeNow enrichment, Playwright, Chromium, Smartproxy,
-2Captcha, or another Railway service.
-
-## What it does
-
-It queries:
+Standalone Railway cron service that processes leftover leads from:
 
 `unfiltered_ins_mold_pest_housecl_plumb_paint_land_lawn_handy`
 
-and finds today's valid lead rows that:
+This service contains its own FamilyTreeNow lookup logic. It does not call or import another Railway service.
 
-- have `ftn_enriched_at IS NULL`
-- are at least `CLEANUP_MINIMUM_AGE_MINUTES` old
-- have a null, pending, failed, or processing FTN status
+## Behavior
 
-It then closes those leftover rows by setting:
+It loads scraper rows where:
+
+- `is_lead = true`
+- `ftn_enriched_at IS NULL`
+- author, city, and state are present
+
+For each row it searches FamilyTreeNow through Smartproxy. When a mobile phone is found, it:
+
+1. Inserts the result into `familytreenow`.
+2. Routes matching contractors.
+3. Sets the source row's `ftn_enrichment_status` to `enriched`.
+4. Sets `ftn_enriched_at`.
+
+A missing matching result or rejected location remains pending for another run. A confirmed no-phone result is marked `no_phone`; an unusable author is marked `invalid_name`.
+
+## Railway
+
+Copy every variable from `.env.example` into Railway. At minimum, configure:
+
+- `DATABASE_URL`
+- `FTN_PROXY_USER`
+- `FTN_PROXY_PASS`
+- `FTN_PROXIES`
+- `FTN_PROXY_PORT`
+
+The Dockerfile installs Google Chrome and Xvfb. Railway uses the included entrypoint automatically.
+
+## Reset the rows incorrectly marked by the previous cleanup service
 
 ```sql
-ftn_enrichment_status = 'cleanup_skipped'
-ftn_enriched_at = NOW()
+UPDATE unfiltered_ins_mold_pest_housecl_plumb_paint_land_lawn_handy
+SET
+    ftn_enrichment_status = NULL,
+    ftn_enriched_at = NULL
+WHERE id IN (
+    1328, 1329, 1332, 1339, 1341, 1347,
+    1352, 1362, 1369, 1389, 1391
+)
+  AND ftn_enrichment_status = 'cleanup_skipped';
 ```
 
-This prevents them from remaining pending into the next day.
-
-## Railway setup
-
-1. Push this folder to GitHub.
-2. Create a new Railway service from the repository.
-3. Add `DATABASE_URL`.
-4. Add the optional cleanup variables from `.env.example`.
-5. Set the cron schedule after the final normal scraper/enrichment run.
-
-The default start command is:
+## Run locally
 
 ```bash
+npm install
 npm start
 ```
-
-## Safe test
-
-Temporarily set:
-
-```env
-CLEANUP_DRY_RUN=true
-```
-
-The service will list matching rows without updating them.
-
-After verifying the Railway logs, change it to:
-
-```env
-CLEANUP_DRY_RUN=false
-```
-
-## Suggested cron
-
-Railway cron schedules use UTC. Pick a time after your final regular cron run.
-
-For example:
-
-```cron
-30 4 * * *
-```
-
-On August 4, 2026, that corresponds to 11:30 PM Central Daylight Time.
-
-## Important
-
-The cleanup status can be changed through:
-
-```env
-CLEANUP_STATUS=cleanup_skipped
-```
-
-No database migration or new columns are required.
