@@ -376,86 +376,124 @@ function loadNeighborhoodPolygonIndex() {
     return NEIGHBORHOOD_POLYGON_INDEX;
 }
 
-function findNeighborhoodPolygon(locationName, state) {
+function findNeighborhoodPolygonCandidates(locationName, state) {
     const index = loadNeighborhoodPolygonIndex();
     const key = normalizeNeighborhoodKey(locationName);
 
     if (!index || !key) {
-        return null;
+        return [];
     }
 
     const expectedState = cleanText(state).toUpperCase();
     const candidates = index.get(key) || [];
+
     const stateCandidates = expectedState
         ? candidates.filter(
             (candidate) =>
-                !candidate.state || candidate.state === expectedState,
+                !candidate.state ||
+                candidate.state === expectedState,
         )
         : candidates;
 
-    const usable = stateCandidates.filter((candidate) => candidate.city);
+    const usable = stateCandidates.filter(
+        (candidate) => candidate.city,
+    );
 
     if (!usable.length) {
-        return null;
+        return [];
     }
 
+    /*
+     * A neighborhood name may exist under multiple parent cities.
+     * Example:
+     *
+     * Parkdale -> Dallas, TX
+     * Parkdale -> Plano, TX
+     *
+     * Return one candidate per distinct parent city instead of
+     * refusing to resolve the neighborhood.
+     */
     const uniqueCities = new Map();
 
     for (const candidate of usable) {
-        const cityKey = normalizeNeighborhoodKey(candidate.city);
+        const cityKey =
+            normalizeNeighborhoodKey(candidate.city);
 
-        if (cityKey && !uniqueCities.has(cityKey)) {
-            uniqueCities.set(cityKey, candidate);
+        const stateKey =
+            cleanText(
+                candidate.state || expectedState,
+            ).toUpperCase();
+
+        const uniqueKey = `${cityKey}|${stateKey}`;
+
+        if (
+            cityKey &&
+            !uniqueCities.has(uniqueKey)
+        ) {
+            uniqueCities.set(uniqueKey, candidate);
         }
     }
 
-    if (uniqueCities.size === 1) {
-        return [...uniqueCities.values()][0];
-    }
-
-    // If a key is ambiguous, prefer the record whose parent city is already
-    // the supplied value. Otherwise do not guess.
-    const sameCity = usable.find(
-        (candidate) =>
-            normalizeNeighborhoodKey(candidate.city) === key,
-    );
-
-    return sameCity || null;
+    return [...uniqueCities.values()];
 }
 
-function resolveSearchLocation(city, state) {
+function resolveSearchLocations(city, state) {
     const originalCity = cleanText(city);
-    const originalState = cleanText(state).toUpperCase();
-    const polygon = findNeighborhoodPolygon(originalCity, originalState);
+    const originalState =
+        cleanText(state).toUpperCase();
 
-    if (polygon?.city) {
-        return {
-            city: polygon.city,
-            state: polygon.state || originalState,
+    const polygonCandidates =
+        findNeighborhoodPolygonCandidates(
+            originalCity,
+            originalState,
+        );
+
+    if (polygonCandidates.length) {
+        return polygonCandidates.map((candidate) => ({
+            city: cleanText(candidate.city),
+            state:
+                cleanText(
+                    candidate.state || originalState,
+                ).toUpperCase(),
             source: "polygon",
             neighborhood:
-                polygon.name || polygon.shortName || originalCity,
-        };
+                candidate.name ||
+                candidate.shortName ||
+                originalCity,
+            neighborhoodId:
+                candidate.neighborhoodId ?? null,
+            slug: candidate.slug || null,
+        }));
     }
 
     const overrideCity =
-        LOCATION_OVERRIDES[originalCity.toLowerCase()];
+        LOCATION_OVERRIDES[
+            originalCity.toLowerCase()
+            ];
 
     if (overrideCity) {
-        return {
-            city: overrideCity,
-            state: originalState,
-            source: "override",
-            neighborhood: originalCity,
-        };
+        return [
+            {
+                city: overrideCity,
+                state: originalState,
+                source: "override",
+                neighborhood: originalCity,
+                neighborhoodId: null,
+                slug: null,
+            },
+        ];
     }
 
-    return {
-        city: originalCity,
-        state: originalState,
-        source: "original",
-        neighborhood: originalCity,
-    };
+    return [
+        {
+            city: originalCity,
+            state: originalState,
+            source: "original",
+            neighborhood: originalCity,
+            neighborhoodId: null,
+            slug: null,
+        },
+    ];
 }
 
 // Title-case a name for searching: capitalize the first letter and any letter
@@ -3635,35 +3673,15 @@ async function logNoPhoneDiagnostics(page, person) {
     }
 }
 
-async function enrichOneRow(page, row) {
-    const person = parsePersonName(row.author);
+async function enrichOneRowAtLocation(
+    page,
+    row,
+    person,
+    city,
+    state,
+    resolvedLocation,
+) {
 
-    if (!person) {
-        console.log(
-            `[SKIP] ID ${row.id}: rejected non-strict name ` +
-            `"${row.author}".`,
-        );
-
-        return {
-            status: "invalid_name",
-        };
-    }
-
-    const city = cleanText(row.city);
-    const state = cleanText(row.state).toUpperCase();
-
-    if (!city || !/^[A-Z]{2}$/.test(state)) {
-        console.log(
-            `[SKIP] ID ${row.id}: unusable city/state ` +
-            `"${row.city}, ${row.state}". Leaving the row pending.`,
-        );
-
-        return {
-            status: "location_not_selected",
-        };
-    }
-
-    const resolvedLocation = resolveSearchLocation(city, state);
     const searchCity = resolvedLocation.city;
     const searchState = resolvedLocation.state || state;
 
@@ -3868,6 +3886,144 @@ async function enrichOneRow(page, row) {
 
     return {
         status: "no_mobile_phone",
+    };
+}
+
+
+async function enrichOneRow(page, row) {
+    const person = parsePersonName(row.author);
+
+    if (!person) {
+        console.log(
+            `[SKIP] ID ${row.id}: rejected non-strict name ` +
+            `"${row.author}".`,
+        );
+
+        return {
+            status: "invalid_name",
+        };
+    }
+
+    const city = cleanText(row.city);
+    const state =
+        cleanText(row.state).toUpperCase();
+
+    if (!city || !/^[A-Z]{2}$/.test(state)) {
+        console.log(
+            `[SKIP] ID ${row.id}: unusable city/state ` +
+            `"${row.city}, ${row.state}". ` +
+            `Leaving the row pending.`,
+        );
+
+        return {
+            status: "location_not_selected",
+        };
+    }
+
+    const searchLocations =
+        resolveSearchLocations(city, state);
+
+    console.log(
+        `[LOCATION] "${city}, ${state}" has ` +
+        `${searchLocations.length} search location(s): ` +
+        searchLocations
+            .map(
+                (location) =>
+                    `${location.city}, ${location.state}`,
+            )
+            .join(" | "),
+    );
+
+    let selectedAnyLocation = false;
+    let sawNoMobilePhone = false;
+    let sawFailedAttempt = false;
+
+    for (
+        let index = 0;
+        index < searchLocations.length;
+        index += 1
+    ) {
+        const resolvedLocation =
+            searchLocations[index];
+
+        console.log(
+            `[LOCATION] Attempt ${index + 1}/` +
+            `${searchLocations.length}: ` +
+            `${resolvedLocation.city}, ` +
+            `${resolvedLocation.state}`,
+        );
+
+        const result =
+            await enrichOneRowAtLocation(
+                page,
+                row,
+                person,
+                city,
+                state,
+                resolvedLocation,
+            );
+
+        /*
+         * Stop immediately when a phone is found.
+         * The returned searchCity/searchState remain the city that
+         * actually produced the successful FTN match, so contractor
+         * routing and insertion continue working unchanged.
+         */
+        if (result.status === "updated") {
+            return result;
+        }
+
+        if (
+            result.status !==
+            "location_not_selected"
+        ) {
+            selectedAnyLocation = true;
+        }
+
+        if (
+            result.status ===
+            "no_mobile_phone"
+        ) {
+            sawNoMobilePhone = true;
+        }
+
+        if (result.status === "failed") {
+            sawFailedAttempt = true;
+        }
+
+        if (
+            index <
+            searchLocations.length - 1
+        ) {
+            console.log(
+                `[LOCATION] No usable phone from ` +
+                `${resolvedLocation.city}, ` +
+                `${resolvedLocation.state}; ` +
+                `trying the next parent city.`,
+            );
+        }
+    }
+
+    if (sawNoMobilePhone) {
+        return {
+            status: "no_mobile_phone",
+        };
+    }
+
+    if (sawFailedAttempt) {
+        return {
+            status: "failed",
+        };
+    }
+
+    if (!selectedAnyLocation) {
+        return {
+            status: "location_not_selected",
+        };
+    }
+
+    return {
+        status: "no_matching_result",
     };
 }
 
