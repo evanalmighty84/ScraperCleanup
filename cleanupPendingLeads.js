@@ -2370,32 +2370,43 @@ async function getFamilyTreeNowResults(page, person, city, state) {
     const results = [];
     const seenHrefs = new Set();
 
-    // Dedupe by the per-card `smck` token, preferring the link that carries
-    // `rid=` (the real "View Details" detail-page link) over the card's name
-    // link (which points back at the results listing and has no `rid`). The
-    // broadened selector otherwise double-counts each card, wasting an
-    // attempt on the listing page before the real detail link succeeds.
+    // FamilyTreeNow commonly renders two links for the same person card.
+    // The search-level `smck` token may be shared across many different people,
+    // so it must never be used as the primary person identity. Prefer `rid`,
+    // then the normalized detail URL, and only fall back to the card text.
     const dedupedCards = [];
-    const smckIndex = new Map();
+    const cardIndex = new Map();
 
     for (const card of cards) {
         const href = card.href || "";
-        const smck =
-            (href.match(/[?&]smck=([^&#]+)/) || [])[1];
-        const key = smck || href || `button-${dedupedCards.length}`;
-        const hasRid = /[?&]rid=/.test(href);
-        const previousIndex = smckIndex.get(key);
+        const rid =
+            (href.match(/[?&]rid=([^&#]+)/) || [])[1];
+        const normalizedHref = href.split("#")[0];
+        const normalizedText = cleanText(card.text).toLowerCase();
+        const key = rid
+            ? `rid:${rid}`
+            : normalizedHref
+              ? `href:${normalizedHref}`
+              : `text:${normalizedText}`;
+        const previousIndex = cardIndex.get(key);
 
         if (previousIndex === undefined) {
-            smckIndex.set(key, dedupedCards.length);
+            cardIndex.set(key, dedupedCards.length);
             dedupedCards.push(card);
-        } else if (
-            hasRid &&
-            !/[?&]rid=/.test(dedupedCards[previousIndex].href || "")
-        ) {
+            continue;
+        }
+
+        // If duplicate variants exist, retain the URL that contains a real
+        // record id because that is the most reliable detail-page target.
+        const previousHref = dedupedCards[previousIndex].href || "";
+        if (rid && !/[?&]rid=/.test(previousHref)) {
             dedupedCards[previousIndex] = card;
         }
     }
+
+    console.log(
+        `[DEBUG] ${dedupedCards.length} distinct FTN person card(s) after dedupe.`,
+    );
 
     dedupedCards.forEach((card, index) => {
         const href = card.href || `button-${index}`;
@@ -2467,14 +2478,16 @@ async function getFamilyTreeNowResults(page, person, city, state) {
         const livedInCityMatch =
             Boolean(expectedCity) &&
             livedInNormalized.length > 0 &&
-            new RegExp(`\b${escapeRegex(expectedCity)}\b`).test(
-                livedInNormalized,
-            ) &&
+            new RegExp(
+                `\\b${escapeRegex(expectedCity)}\\b`,
+                "i",
+            ).test(livedInNormalized) &&
             (expectedState
                 ? new RegExp(
-                    `\b${escapeRegex(
+                    `\\b${escapeRegex(
                         expectedState.toLowerCase(),
-                    )}\b`,
+                    )}\\b`,
+                    "i",
                 ).test(livedInNormalized)
                 : true);
 
