@@ -74,7 +74,7 @@ const ALLOWED_SOURCE_TABLES = new Set([
 
 const REQUESTED_SOURCE_TABLE =
     process.env.FTN_SOURCE_TABLE ||
-    "unfiltered_ins_mold_pest_housecl_plumb_paint_land_lawn_handy";
+    "unfiltered_general_contracting";
 
 if (!ALLOWED_SOURCE_TABLES.has(REQUESTED_SOURCE_TABLE)) {
     throw new Error(
@@ -152,9 +152,9 @@ const PROXY_PORT = Number(process.env.FTN_PROXY_PORT || 6014);
 // PROXY_USER / PROXY_PASS names documented in the Phase 2 README. The FTN_
 // prefix wins when both are set so existing behavior is preserved.
 const PROXY_USER =
-    process.env.FTN_PROXY_USER || process.env.PROXY_USER || "";
+    process.env.FTN_PROXY_USER || process.env.PROXY_USER || "smart-kig91nd2ixd4";
 const PROXY_PASS =
-    process.env.FTN_PROXY_PASS || process.env.PROXY_PASS || "";
+    process.env.FTN_PROXY_PASS || process.env.PROXY_PASS || "viWjWbPWNUVgWG0b";
 const WORKER_COUNT = Number(
     process.env.FTN_WORKER_COUNT || Math.min(PROXY_POOL.length, 3) || 1,
 );
@@ -162,12 +162,6 @@ const WARM_UP_ENABLED = String(process.env.FTN_WARM_UP || "1") !== "0";
 const BROWSER_MODE = (
     process.env.FTN_BROWSER_MODE || "smartproxy"
 ).toLowerCase();
-
-if (BROWSER_MODE === "smartproxy" && (!PROXY_USER || !PROXY_PASS)) {
-    throw new Error(
-        "Smartproxy credentials are required. Set FTN_PROXY_USER and FTN_PROXY_PASS.",
-    );
-}
 
 // ---- Subdivision / neighborhood -> real-city overrides ----
 // The DB `city` column sometimes holds a subdivision or neighborhood name
@@ -2005,34 +1999,21 @@ async function getExistingTurnstileToken(page) {
 
 async function injectTurnstileToken(page, token) {
     await page.evaluate((token) => {
-        const selectors = [
-            'input[name="cf-turnstile-response"]',
-            'textarea[name="cf-turnstile-response"]',
-            'input[name="g-recaptcha-response"]',
-            'textarea[name="g-recaptcha-response"]',
-            "#cf-turnstile-response",
-        ];
+        const selectors =
+            '[name="cf-turnstile-response"], ' +
+            '[name="g-recaptcha-response"], ' +
+            "#cf-turnstile-response";
 
-        for (const selector of selectors) {
-            document.querySelectorAll(selector).forEach((field) => {
-                field.value = token;
-
-                field.dispatchEvent(
-                    new Event("input", {
-                        bubbles: true,
-                    }),
-                );
-
-                field.dispatchEvent(
-                    new Event("change", {
-                        bubbles: true,
-                    }),
-                );
+        document
+            .querySelectorAll(selectors)
+            .forEach((el) => {
+                el.value = token;
             });
-        }
 
         if (typeof window.__tsCallback === "function") {
-            window.__tsCallback(token);
+            try {
+                window.__tsCallback(token);
+            } catch (e) {}
         }
     }, token);
 }
@@ -2177,19 +2158,10 @@ async function solveFamilyTreeNowTurnstile(page) {
     await sleep(1_500);
 
     if (await isOnCaptchaPage(page)) {
-        console.log(
-            "[CAPTCHA] Solved token did not clear the page. " +
-            "Reloading FamilyTreeNow for a fresh challenge...",
+        throw new Error(
+            "Turnstile submit did not leave the captcha page " +
+            `(after ${Date.now() - solveStart}ms).`,
         );
-
-        await page.goto(FTN_HOME_URL, {
-            waitUntil: "domcontentloaded",
-            timeout: 60_000,
-        });
-
-        await waitForPageSettled(page);
-
-        throw new Error("CAPTCHA_RESTART_ROW");
     }
 
     // The captcha pass navigated us somewhere (results or back to the
@@ -2299,15 +2271,8 @@ async function getFamilyTreeNowResults(page, person, city, state) {
             const clean = (value) =>
                 String(value || "").replace(/\s+/g, " ").trim();
 
-            const links = Array.from(
-                document.querySelectorAll(
-                    "a.detail-link[href], a[data-perma-link][href], " +
-                    "a[href*='/record/'], a[href*='/search/people/']",
-                ),
-            ).filter((element) => {
-                // Skip hidden/template duplicate links so dedupe-by-href
-                // keeps the visible card, not a stale hidden copy.
-                if (!element.getClientRects().length) {
+            const isVisible = (element) => {
+                if (!element || !element.getClientRects().length) {
                     return false;
                 }
 
@@ -2318,31 +2283,68 @@ async function getFamilyTreeNowResults(page, person, city, state) {
                     style.visibility !== "hidden" &&
                     parseFloat(style.opacity) !== 0
                 );
-            });
+            };
+
+            // Prefer the actual visible View Details links. FamilyTreeNow also
+            // renders name links and hidden/template links that can cause the
+            // same person card to be counted twice or the entire result panel
+            // to be treated as one giant card.
+            let links = Array.from(
+                document.querySelectorAll(
+                    "a.detail-link[href], a[data-perma-link][href]",
+                ),
+            ).filter(
+                (element) =>
+                    isVisible(element) &&
+                    (/view details/i.test(element.textContent || "") ||
+                        element.classList.contains("detail-link")),
+            );
+
+            // Layout fallback for pages where the detail-link class is absent.
+            if (!links.length) {
+                links = Array.from(
+                    document.querySelectorAll(
+                        "a[href*='/record/'], a[href*='/search/people/']",
+                    ),
+                ).filter(isVisible);
+            }
 
             return links.map((element) => {
                 let current = element;
+                let bestCard = null;
 
-                for (let depth = 0; depth < 12 && current; depth += 1) {
+                for (let depth = 0; depth < 10 && current; depth += 1) {
                     const text = clean(
                         current.innerText || current.textContent,
                     );
 
-                    if (
-                        /\bNAME:/i.test(text) &&
-                        /\bLIVES\s+IN:/i.test(text)
-                    ) {
-                        return { href: element.href, text };
+                    const nameCount =
+                        (text.match(/\bNAME:/gi) || []).length;
+                    const livesInCount =
+                        (text.match(/\bLIVES\s+IN:/gi) || []).length;
+
+                    // The smallest useful individual record container has one
+                    // NAME and one LIVES IN label. Once an ancestor contains
+                    // multiple labels, we have climbed into the parent panel
+                    // that contains multiple people and must stop.
+                    if (nameCount === 1 && livesInCount === 1) {
+                        bestCard = current;
+                    }
+
+                    if (nameCount > 1 || livesInCount > 1) {
+                        break;
                     }
 
                     current = current.parentElement;
                 }
 
                 const fallback =
+                    bestCard ||
                     element.closest(
-                        "tr, article, .row, .card, " +
-                        "[class*='record'], [class*='result']",
-                    ) || element.parentElement;
+                        "article, .card, [class*='person'], " +
+                        "[class*='record-item'], [class*='result-item']",
+                    ) ||
+                    element.parentElement;
 
                 return {
                     href: element.href,
@@ -2353,6 +2355,17 @@ async function getFamilyTreeNowResults(page, person, city, state) {
             });
         })
         .catch(() => []);
+
+    console.log(
+        `[DEBUG] Found ${cards.length} raw FTN result card link(s).`,
+    );
+
+    cards.forEach((card, index) => {
+        console.log(
+            `[DEBUG] Raw card ${index + 1}: ` +
+            `${cleanText(card.text).slice(0, 300)}`,
+        );
+    });
 
     const results = [];
     const seenHrefs = new Set();
@@ -3980,32 +3993,19 @@ async function runEnrichmentLoop(page, rows, workerIndex) {
                     `(attempt ${attempt}/2): ${error.message}`,
                 );
 
-                const shouldRestartCaptchaRow =
-                    error.message === "CAPTCHA_RESTART_ROW";
-
                 const looksLikeCaptcha =
                     /captcha|turnstile|verification|2captcha/i.test(
                         error.message,
                     );
 
-                if (
-                    (shouldRestartCaptchaRow || looksLikeCaptcha) &&
-                    attempt === 1
-                ) {
-                    console.log(
-                        `[RETRY] ID ${row.id}: restarting the search ` +
-                        "with a fresh FamilyTreeNow captcha session.",
+                if (looksLikeCaptcha && attempt === 1) {
+                    await ensureCaptchaSolved(page).catch(
+                        (e) => {
+                            console.error(
+                                `   retry clear-up failed: ${e.message}`,
+                            );
+                        },
                     );
-
-                    if (!shouldRestartCaptchaRow) {
-                        await page.goto(FTN_HOME_URL, {
-                            waitUntil: "domcontentloaded",
-                            timeout: 60_000,
-                        });
-
-                        await waitForPageSettled(page);
-                    }
-
                     continue;
                 }
 
