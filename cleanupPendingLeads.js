@@ -2005,21 +2005,34 @@ async function getExistingTurnstileToken(page) {
 
 async function injectTurnstileToken(page, token) {
     await page.evaluate((token) => {
-        const selectors =
-            '[name="cf-turnstile-response"], ' +
-            '[name="g-recaptcha-response"], ' +
-            "#cf-turnstile-response";
+        const selectors = [
+            'input[name="cf-turnstile-response"]',
+            'textarea[name="cf-turnstile-response"]',
+            'input[name="g-recaptcha-response"]',
+            'textarea[name="g-recaptcha-response"]',
+            "#cf-turnstile-response",
+        ];
 
-        document
-            .querySelectorAll(selectors)
-            .forEach((el) => {
-                el.value = token;
+        for (const selector of selectors) {
+            document.querySelectorAll(selector).forEach((field) => {
+                field.value = token;
+
+                field.dispatchEvent(
+                    new Event("input", {
+                        bubbles: true,
+                    }),
+                );
+
+                field.dispatchEvent(
+                    new Event("change", {
+                        bubbles: true,
+                    }),
+                );
             });
+        }
 
         if (typeof window.__tsCallback === "function") {
-            try {
-                window.__tsCallback(token);
-            } catch (e) {}
+            window.__tsCallback(token);
         }
     }, token);
 }
@@ -2164,10 +2177,19 @@ async function solveFamilyTreeNowTurnstile(page) {
     await sleep(1_500);
 
     if (await isOnCaptchaPage(page)) {
-        throw new Error(
-            "Turnstile submit did not leave the captcha page " +
-            `(after ${Date.now() - solveStart}ms).`,
+        console.log(
+            "[CAPTCHA] Solved token did not clear the page. " +
+            "Reloading FamilyTreeNow for a fresh challenge...",
         );
+
+        await page.goto(FTN_HOME_URL, {
+            waitUntil: "domcontentloaded",
+            timeout: 60_000,
+        });
+
+        await waitForPageSettled(page);
+
+        throw new Error("CAPTCHA_RESTART_ROW");
     }
 
     // The captcha pass navigated us somewhere (results or back to the
@@ -3958,19 +3980,32 @@ async function runEnrichmentLoop(page, rows, workerIndex) {
                     `(attempt ${attempt}/2): ${error.message}`,
                 );
 
+                const shouldRestartCaptchaRow =
+                    error.message === "CAPTCHA_RESTART_ROW";
+
                 const looksLikeCaptcha =
                     /captcha|turnstile|verification|2captcha/i.test(
                         error.message,
                     );
 
-                if (looksLikeCaptcha && attempt === 1) {
-                    await ensureCaptchaSolved(page).catch(
-                        (e) => {
-                            console.error(
-                                `   retry clear-up failed: ${e.message}`,
-                            );
-                        },
+                if (
+                    (shouldRestartCaptchaRow || looksLikeCaptcha) &&
+                    attempt === 1
+                ) {
+                    console.log(
+                        `[RETRY] ID ${row.id}: restarting the search ` +
+                        "with a fresh FamilyTreeNow captcha session.",
                     );
+
+                    if (!shouldRestartCaptchaRow) {
+                        await page.goto(FTN_HOME_URL, {
+                            waitUntil: "domcontentloaded",
+                            timeout: 60_000,
+                        });
+
+                        await waitForPageSettled(page);
+                    }
+
                     continue;
                 }
 
