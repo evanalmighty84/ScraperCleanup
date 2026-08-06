@@ -727,12 +727,18 @@ function parseReportedDate(text = "") {
 }
 
 async function getRowsToEnrich() {
-    // Phase 2: target only Sonar-confirmed leads (is_lead=true, set by Phase 1)
-    // that Phase 2 has not yet processed. We use ftn_enriched_at (timestamptz),
-    // a dedicated Phase-2-owned column, as the processed marker - NOT enriched_at
-    // / enrichment_status / enrichment, which Phase 1 owns. Newest rows first
-    // (id DESC) so fresh leads are prioritized. author/city/state must be present
-    // for a lookup. lead_type feeds contractor routing on insert.
+    const targetIds = [
+        544,
+        545,
+        546,
+        549,
+        553,
+        556,
+        558,
+        562,
+        565,
+    ];
+
     const { rows } = await pool.query(
         `
             SELECT
@@ -743,15 +749,15 @@ async function getRowsToEnrich() {
                 state,
                 lead_type
             FROM ${TABLE_NAME}
-            WHERE is_lead = true
+            WHERE id = ANY($1::int[])
+              AND is_lead = TRUE
               AND ftn_enriched_at IS NULL
               AND author IS NOT NULL
               AND city IS NOT NULL
               AND state IS NOT NULL
-            ORDER BY id DESC
-                LIMIT $1
+            ORDER BY id ASC
         `,
-        [MAX_ROWS],
+        [targetIds],
     );
 
     return rows;
